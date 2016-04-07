@@ -20,35 +20,11 @@ RUN apt-get update && apt-get -y install  unzip \
                         p7zip-full
 
 # https://www.kernel.org/
-ENV KERNEL_VERSION  4.1.19
+ENV KERNEL_VERSION  4.3.5
 
 # Fetch the kernel sources
 RUN curl --retry 10 https://www.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-$KERNEL_VERSION.tar.xz | tar -C / -xJ && \
     mv /linux-$KERNEL_VERSION /linux-kernel
-
-# http://aufs.sourceforge.net/
-ENV AUFS_REPO       https://github.com/sfjro/aufs4-standalone
-ENV AUFS_BRANCH     aufs4.1.13+
-ENV AUFS_COMMIT     9b0fe5a0ac42f9dca6ecf3261178ce101a270948
-# we use AUFS_COMMIT to get stronger repeatability guarantees
-
-# Download AUFS and apply patches and files, then remove it
-RUN git clone -b "$AUFS_BRANCH" "$AUFS_REPO" /aufs-standalone && \
-    cd /aufs-standalone && \
-    git checkout -q "$AUFS_COMMIT" && \
-    cd /linux-kernel && \
-    cp -r /aufs-standalone/Documentation /linux-kernel && \
-    cp -r /aufs-standalone/fs /linux-kernel && \
-    cp -r /aufs-standalone/include/uapi/linux/aufs_type.h /linux-kernel/include/uapi/linux/ && \
-    set -e && for patch in \
-        /aufs-standalone/aufs*-kbuild.patch \
-        /aufs-standalone/aufs*-base.patch \
-        /aufs-standalone/aufs*-mmap.patch \
-        /aufs-standalone/aufs*-standalone.patch \
-        /aufs-standalone/aufs*-loopback.patch \
-    ; do \
-        patch -p1 < "$patch"; \
-    done
 
 COPY kernel_config /linux-kernel/.config
 
@@ -113,17 +89,6 @@ RUN curl -fL http://http.debian.net/debian/pool/main/libc/libcap2/libcap2_2.22.o
     make prefix=`pwd`/output install && \
     mkdir -p $ROOTFS/usr/local/lib && \
     cp -av `pwd`/output/lib64/* $ROOTFS/usr/local/lib
-
-# Make sure the kernel headers are installed for aufs-util, and then build it
-RUN cd /linux-kernel && \
-    make INSTALL_HDR_PATH=/tmp/kheaders headers_install && \
-    cd / && \
-    git clone https://github.com/Distrotech/aufs-util.git && \
-    cd /aufs-util && \
-    git checkout 5e0c348bd8b1898beb1e043b026bcb0e0c7b0d54 && \
-    CPPFLAGS="-I/tmp/kheaders/include" CLFAGS=$CPPFLAGS LDFLAGS=$CPPFLAGS make && \
-    DESTDIR=$ROOTFS make install && \
-    rm -rf /tmp/kheaders
 
 # Prepare the ISO directory with the kernel
 RUN cp -v /linux-kernel/arch/x86_64/boot/bzImage /tmp/iso/boot/vmlinuz64
@@ -242,12 +207,11 @@ RUN depmod -a -b $ROOTFS $KERNEL_VERSION-boot2docker
 COPY VERSION $ROOTFS/etc/version
 RUN cp -v $ROOTFS/etc/version /tmp/iso/version
 
-# Get the Docker binaries with version that matches our boot2docker version.
-# TODO replace "--strip-components=3" with "--strip-components=1" for 1.11.0 GA
-RUN curl -fSL -o /tmp/dockerbin.tgz https://get.docker.com/builds/Linux/x86_64/docker-$(cat $ROOTFS/etc/version).tgz && \
-    tar -zxvf /tmp/dockerbin.tgz -C "$ROOTFS/usr/local/bin" --strip-components=3 && \
-    rm /tmp/dockerbin.tgz && \
-    chroot "$ROOTFS" docker -v
+# Get the Docker version that matches our boot2docker version
+# Note: `docker version` returns non-true when there is no server to ask
+ADD bundles/latest/binary /doc-bin
+RUN mv /doc-bin/* $ROOTFS/usr/local/bin/ && \
+    $ROOTFS/usr/local/bin/docker -v
 
 # Install Tiny Core Linux rootfs
 RUN cd $ROOTFS && zcat /tcl_rootfs.gz | cpio -f -i -H newc -d --no-absolute-filenames
